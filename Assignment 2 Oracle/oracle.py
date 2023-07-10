@@ -9,6 +9,7 @@ f.close()
 
 cipher = AES.new(key, AES.MODE_CBC, iv)
 plaintext = cipher.decrypt(ciphertext)
+
 #last byte tells us how much padding there is
 padnum = 16 - plaintext[-1]
 if padnum <= 0:
