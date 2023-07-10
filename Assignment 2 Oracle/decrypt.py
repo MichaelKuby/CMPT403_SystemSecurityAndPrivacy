@@ -1,5 +1,6 @@
 import secrets
 import subprocess
+import sys
 
 
 def replace(r_k, byte_string):
@@ -43,27 +44,27 @@ def decrypt_first_byte(ciphertext, block_from_end):
         random_byteString += secrets.token_bytes(1)
 
     # Append bytes i = 0 to 15
-    for i in range(245, 256):
+    for i in range(256):
         r_copy = random_byteString + bytes([i])
         r_with_y_N = r_copy + y_N
 
         # Check Oracle
-        filename = 'output.bin'
-        result = check_oracle(filename, r_with_y_N)
+        filename2 = 'output1'
+        result = check_oracle(filename2, r_with_y_N)
 
         if result == 48:
             continue
         else:
             # Found i s.t. the oracle returned yes
-            for k in range(16):
+            for k in range(15):
                 r_with_y_N = replace(k, r_with_y_N)
-                result2 = check_oracle(filename, r_with_y_N)
+                result2 = check_oracle(filename2, r_with_y_N)
 
                 if result2 == 48:
                     # Oracle returned "no".
                     decrypt = i ^ k
                     break
-                elif k < 15:
+                elif k < 14:
                     # Oracle returned yes but k < 15
                     continue
                 else:
@@ -78,26 +79,31 @@ def decrypt_first_byte(ciphertext, block_from_end):
     return bytes([x_n_16]), bytes([decrypt])
 
 
-def decrypt_any_byte(ciphertext, block_from_end, byte_k, previous_decrypt_list):
+def decrypt_any_byte(ciphertext, block_from_end, byte_k, previous_decrypt):
+    """
+    :param ciphertext: The ciphertext to be decoded
+    :param block_from_end: The number of blocks from the end of the ciphertexts. "End" block is n = 1
+    :param byte_k: byte_15 recovered by decrypt_first_byte. byte_k ranges from 0 to 14 in reverse order.
+    :param previous_decrypt: D(y_N)_{k+1} | D(y_N)_{k+2} | ... | D(y_N)_16 as a byte object
+    :return: x_n_byte_k, D(y_N)_byte_k both in byte form
+    """
+
     # Capture the appropriate block from the ciphertext
     y_N_start = (-16 * block_from_end)
 
-    if y_N_start + 16 == 0:
+    if block_from_end == 1:
         y_N = ciphertext[y_N_start:]
     else:
         y_N = ciphertext[y_N_start:y_N_start + 16]
 
     y_N_prev = ciphertext[y_N_start - 16:y_N_start]
 
-    random_byteString = b''
-    xor_previous_decrypt = b''
-
-    for val in previous_decrypt_list:
-        new_val = val ^ (byte_k - 1)
-        xor_previous_decrypt = bytes([new_val]) + xor_previous_decrypt
+    xor_previous_decrypt_bytearray = bytearray([val ^ byte_k for val in previous_decrypt])
+    xor_previous_decrypt = bytes(xor_previous_decrypt_bytearray)
 
     # Fill the block with byte_k-1 random bytes
-    for i in range(byte_k-1):
+    random_byteString = b''
+    for i in range(byte_k):
         random_byteString += secrets.token_bytes(1)
 
     # Ask Oracle Process begins
@@ -108,43 +114,54 @@ def decrypt_any_byte(ciphertext, block_from_end, byte_k, previous_decrypt_list):
         r_y_N = r + y_N
 
         # Check Oracle
-        filename = 'output2'
-        result = check_oracle(filename, r_y_N)
+        filename2 = 'output2'
+        result = check_oracle(filename2, r_y_N)
 
         if result == 48:
             # Oracle returned no
             i += 1
-            print(i)
             continue
         else:
             # Found i s.t. the oracle returned yes
-            print(f"got here. i = {i}")
-            current_decrypt = i ^ (byte_k - 1)
+            # print(f"got here. i = {i}")
+            current_decrypt = i ^ byte_k
             break
 
     # Decrypt x_n
     x_N_k = current_decrypt ^ y_N_prev[byte_k]
-    return bytes([x_N_k]), previous_decrypt_list.append(bytes([current_decrypt]))
+    return bytes([x_N_k]), bytes([current_decrypt])
 
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    with open('ciphertext', 'rb') as file:
+    filename = sys.argv[1]
+    with open(filename, 'rb') as file:
         content = file.read()  # content is of class 'bytes'
 
-    x_N = b''
-    n = 1
-    # Decrypt the first byte
-    x_N_current, decrypt_first = decrypt_first_byte(content, n)
-    x_N += x_N_current
-    print(f"x_N block: {x_N}, first decrypt: {decrypt_first}")
+    x = b''
+    num_bytes = len(content)
+    num_blocks = num_bytes // 16
 
-    decrypt_list = list(decrypt_first)
+    for block_n in range(1, num_blocks):
+        # Get the last byte - indexed at 15
+        x_N = b''
+        decrypt_chain = b''
 
-    # Decrypt the second byte
-    b = 15
-    x_N_new, decrypt_chain_main = decrypt_any_byte(content, n, b, decrypt_list)
-    x_N = x_N_new + x_N
-    print(f"x_N block: {x_N}, decrypt chain block: {decrypt_chain_main}")
+        x_N_last, decrypt_last = decrypt_first_byte(content, block_n)
+        x_N += x_N_last
+        decrypt_chain += decrypt_last
+        # print(f"x_N block: {x_N}, first decrypt: {decrypt_chain}")
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+        for byte in reversed(range(15)):
+            # Decrypt bytes 14 down to 0
+            x_N_new, decrypt_new = decrypt_any_byte(content, block_n, byte, decrypt_chain)
+            x_N = x_N_new + x_N
+            decrypt_chain = decrypt_new + decrypt_chain
+            # print(f"x_N block: {x_N}, decrypt chain block: {decrypt_chain}")
+
+        # Append the current block to the encoded plaintext
+        x = x_N + x
+
+    # Decode to plaintext and print
+    plaintext = x.decode('utf-8')
+    print(plaintext)
