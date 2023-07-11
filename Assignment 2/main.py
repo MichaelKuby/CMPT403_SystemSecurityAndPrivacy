@@ -55,4 +55,14 @@ if __name__ == '__main__':
     byte_length2 = len(plaintext2.encode(encoding))
     print(byte_length1)
     print(byte_length2)
+
+    filename = "ptext0"
+    filename2 = "ptext1"
+
+    with open(filename, "w") as file:
+        file.write(plaintext1)
+
+    with open(filename2, "w") as file:
+        file.write(plaintext2)
+
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
