@@ -43,10 +43,8 @@ def decrypt_first_byte(ciphertext, block_from_end):
     for i in range(15):
         random_byteString += secrets.token_bytes(1)
 
-    # Append bytes i = 0 to 15
     for i in range(256):
-        r_copy = random_byteString + bytes([i])
-        r_with_y_N = r_copy + y_N
+        r_with_y_N = random_byteString + bytes([i]) + y_N
 
         # Check Oracle
         filename2 = 'output1'
@@ -110,8 +108,7 @@ def decrypt_any_byte(ciphertext, block_from_end, byte_k, previous_decrypt):
     i = 0
     current_decrypt = None
     while True:
-        r = random_byteString + bytes([i]) + xor_previous_decrypt
-        r_y_N = r + y_N
+        r_y_N = random_byteString + bytes([i]) + xor_previous_decrypt + y_N
 
         # Check Oracle
         filename2 = 'output2'
