@@ -160,5 +160,7 @@ if __name__ == '__main__':
         x = x_N + x
 
     # Decode to plaintext and print
-    plaintext = x.decode('ascii')
+    plaintext = x.decode('utf-8')
     print(plaintext, end='')
+
+    sys.exit()
