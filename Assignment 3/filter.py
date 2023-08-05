@@ -7,49 +7,112 @@ import sys
 network = ipaddress.ip_network("142.58.22.0/24")
 
 
-class TCP_Header:
-    def __init__(self, source_port=None, dest_port=None, seq_num=None, ack_num=None, data_offset=None,
-                 reserved=None, control=None, window_size=None, checksum=None, URG_pointer=None, options=None):
-        self.options = options  # Probably will not be present
-        self.URG_pointer = URG_pointer  # If set, points to the first urgent data byte in the packet
-        self.checksum = checksum    # Always correct and can be ignored
-        self.window_size = window_size  # Number of bytes the sender is willing to receive
-        self.control = control  # From left to right, these are: NS, CWR, ECE, URG, ACK, PSH, RST, SYN, FIN.
-        self.reserved = reserved    # Always set to 0
-        self.data_offset = data_offset  # The number of 32-bit words in the TCP header. Indicates where the data begins.
-        #  If the ACK control bit is set this field contains the value of the next sequence number
-        #  the sender of the segment is expecting to receive.
-        self.ack_num = ack_num
-        self.seq_num = seq_num  # Always correct and can be ignored
-        self.dest_port = dest_port  # The destination port number
-        self.source_port = source_port  # The source port number
-
-
-class ICMP_Header:
-    def __init__(self, type=None, code=None, checksum=None, rest=None):
-        self.rest = rest    # Contents depend on the ICMP type and code
-        self.checksum = checksum    # always correct and can be ignored
-        self.code = code    # For echo requests and replies, this field is usually 0.
-        self.type = type    # 8 for echo request, 0 for an echo reply
-
-
-class IP_Packet:
+class TCP:
     def __init__(self, version=None, byte_length=None, identification=None, flags=None, fragment_offset=None,
                  time_to_live=None, protocol=None, header_checksum=None, source_IP=None, destination_IP=None,
-                 ICMP_header=ICMP_Header(), TCP_header=TCP_Header(), malicious='no'):
-        self.TCP_header = TCP_header
-        self.ICMP_header = ICMP_header
-        self.destination_IP = destination_IP
-        self.source_IP = source_IP
-        self.header_checksum = header_checksum
-        self.protocol = protocol
-        self.time_to_live = time_to_live
-        self.fragment_offset = fragment_offset
-        self.flags = flags
-        self.identification = identification
-        self.byte_length = byte_length
+                 source_port=None, dest_port=None, seq_num=None, ack_num=None, data_offset=None,
+                 reserved=None, control=None, window_size=None, checksum=None, URG_pointer=None, malicious="no"):
         self.version = version
+        self.byte_length = byte_length
+        self.identification = identification
+        self.flags = flags
+        self.fragment_offset = fragment_offset
+        self.time_to_live = time_to_live
+        self.protocol = protocol
+        self.header_checksum = header_checksum
+        self.source_IP = source_IP
+        self.destination_IP = destination_IP
+        self.source_port = source_port  # The source port number
+        self.dest_port = dest_port  # The destination port number
+        self.seq_num = seq_num  # Always correct and can be ignored
+        self.ack_num = ack_num
+        self.data_offset = data_offset  # The number of 32-bit words in the TCP header. Indicates where the data begins.
+        self.reserved = reserved  # Always set to 0
+        self.control = control  # From left to right, these are: NS, CWR, ECE, URG, ACK, PSH, RST, SYN, FIN.
+        self.window_size = window_size  # Number of bytes the sender is willing to receive
+        self.checksum = checksum  # Always correct and can be ignored
+        self.URG_pointer = URG_pointer  # If set, points to the first urgent data byte in the packet
         self.malicious = malicious
+
+
+class ICMP:
+    def __init__(self, version=None, byte_length=None, identification=None, flags=None, fragment_offset=None,
+                 time_to_live=None, protocol=None, header_checksum=None, source_IP=None, destination_IP=None,
+                 type=None, code=None, checksum=None, rest=None, malicious="no"):
+        self.version = version
+        self.byte_length = byte_length
+        self.identification = identification
+        self.flags = flags
+        self.fragment_offset = fragment_offset
+        self.time_to_live = time_to_live
+        self.protocol = protocol
+        self.header_checksum = header_checksum
+        self.source_IP = source_IP
+        self.destination_IP = destination_IP
+        self.type = type  # 8 for echo request, 0 for an echo reply
+        self.code = code  # For echo requests and replies, this field is usually 0.
+        self.checksum = checksum  # always correct and can be ignored
+        self.rest = rest  # Contents depend on the ICMP type and code
+        self.malicious = malicious
+
+
+class PortsList:
+    def __init__(self):
+        self.pairs = dict()
+
+    def key(self, packet):
+        source_IP = packet.source_IP
+        source_port = int(packet.source_port, 2)
+        destination_port = int(packet.dest_port, 2)
+        destination_IP = packet.destination_IP
+        return source_IP, destination_IP, source_port, destination_port
+
+    def new_connection(self, packet):
+        key = self.key(packet)
+        if key not in self.pairs:
+            # These two IP's are not already communicating at this port
+            self.pairs[key] = (True, False, False)  # (Syn, Syn-Ack, Ack)
+            return True
+        else:
+            # These two ports are already in communication
+            return False
+
+    def existing_connection(self, packet):
+        key = self.key(packet)
+        if key in self.pairs:
+            return True
+        return False
+
+    def set_syn_ackd(self, packet):
+        key = self.key(packet)
+        if self.pairs[key] == (True, False, False): # (Syn, Syn-Ack, Ack)
+            self.pairs[key] = (True, True, False)   # (Syn, Syn-Ack, Ack)
+
+    def set_connected(self, packet):
+        key = self.key(packet)
+        if self.pairs[key] == (True, True, False): # (Syn, Syn-Ack, Ack)
+            self.pairs[key] = (True, True, True)   # (Syn, Syn-Ack, Ack)
+
+    def del_connection(self, packet):
+        key = self.key(packet)
+        if packet.control['rst'] == 1 or packet.control['fin'] == 1:
+            del self.pairs[key]
+
+    def get_num_half_open(self, packet):
+        key = self.key(packet)
+        IP_pair = key[:2]
+        i = 0
+        for k in self.pairs:
+            if IP_pair == k[:2]:
+                if self.pairs[key] != (True, True, True):   # (True, True, True) signals full connection
+                    i += 1
+        return i
+
+
+
+####################################
+#           Syn Floods             #
+####################################
 
 
 def within_subnet(ip_address):
@@ -58,6 +121,87 @@ def within_subnet(ip_address):
     else:
         return False  # ip is not in the network
 
+
+def new_connection(packet):
+    if packet.control['syn'] == 1 and packet.control['ack'] == 0 \
+            and packet.control['rst'] == 0 and packet.control['fin'] == 0:
+        return True
+    return False
+
+
+def ack_half_open(packet):
+    if packet.control['syn'] == 0 and packet.control['ack'] == 1 \
+            and packet.control['rst'] == 0 and packet.control['fin'] == 0:
+        return True
+    return False
+
+
+def syn_ack(packet):
+    if packet.control['syn'] == 1 and packet.control['ack'] == 1 \
+            and packet.control['rst'] == 0 and packet.control['fin'] == 0:
+        return True
+    return False
+
+
+def disconnect(packet):
+    if packet.control['rst'] == 1 or packet.control['fin'] == 1:
+        return True
+    return False
+
+
+def syn_floods(packets):
+    ports_tracker = PortsList()  # Keeps track of communicating ports and their status.
+
+    for packet in packets:
+        if not packet.protocol == "TCP":
+            continue
+
+        # Is this packet entering?
+        if not within_subnet(packet.source_IP):
+            # Is this packet trying to create a new connection?
+            if new_connection(packet):
+                # Does the source_IP of the packet have less than 10 half open connections with this host?
+                if ports_tracker.get_num_half_open(packet) < 10:
+                    # Try to create a new connection.
+                    ports_tracker.new_connection(packet)
+                else:
+                    # The source_IP of the packet is trying to open > 10 half-open connects with host
+                    packet.malicious = 'yes'
+
+
+
+                # Is this packet acknowledging an existing half open connection?
+                elif ack_half_open(packet) and ports_tracker.existing_connection(packet):
+                    # Set the connection to full
+                    ports_tracker.set_connected(packet)
+                    # Decrement the number of half-open connections for this out-of-network IP
+                    IP_tracker[packet.source_IP] -= 1
+
+                # Is this a packet trying to signal a disconnection?
+                elif disconnect(packet) and ports_tracker.existing_connection(packet):
+                    # Remove the connection from the list of connected ports
+                    ports_tracker.del_connection(packet)
+                else:
+                    # Should never get here. Unknown situation
+                    pass
+
+        # Is this packet going?
+        elif within_subnet(packet.source_IP):
+            # Is this packet Syn-Ack a Syn request?
+            if syn_ack(packet) and ports_tracker.existing_connection(packet):
+                # Set the connection to be syn_ackd
+                ports_tracker.set_syn_ackd(packet)
+
+            # If this packet is an outbound syn request, we don't care
+
+            # If this packet is an outbound fin or rst request, we need to kill the connection
+            elif disconnect(packet) and ports_tracker.existing_connection(packet):
+                ports_tracker.del_connection(packet)
+
+
+####################################
+#        Egress Filtering          #
+####################################
 
 def egress_filtering(packets):
     for packet in packets:
@@ -72,19 +216,37 @@ def egress_filtering(packets):
     return
 
 
-def ping_of_death(fragment_offset):
-    return fragment_offset + 1500 > 65535
+####################################
+#           Ping Attacks           #
+####################################
+
+
+def ping_of_death(packet):
+    if packet.fragment_offset + 1500 > 65535:
+        return True
+    return False
+
+
+def smurf_attack(packet):
+    broadcast_address = network.broadcast_address
+    if packet.destination_IP == broadcast_address:
+        return True
+    return False
 
 
 def two_ping_based_attacks(packets):
     for packet in packets:
-        if ping_of_death(packet.fragment_offset):
-            packet.malicious = "yes"
+        if within_subnet(
+                packet.destination_IP) and packet.protocol == 'ICMP' and packet.type == 8:  # Check that the destination IP is within our subnet
+            if ping_of_death(packet):
+                packet.malicious = "yes"
+            if smurf_attack(packet):
+                packet.malicious = "yes"
 
 
-def syn_floods(content):
-    pass
-
+####################################
+# Parse Packets into Useful Pieces #
+####################################
 
 def string_to_binary(string):
     return bin(int(string, 16))[2:].zfill(len(string) * 4)
@@ -106,6 +268,61 @@ def convert_to_IP(source):
     return ip_address
 
 
+def parse_icmp_header(header_as_bin):
+    packet = ICMP()
+    packet.version = binary_to_string(header_as_bin[0:4])
+    length = binary_to_string(header_as_bin[16:32])
+    packet.byte_length = int(length, 16)
+    packet.identification = binary_to_string(header_as_bin[32:48])
+    packet.flags = header_as_bin[48:51]
+    fragment_offset = binary_to_string(header_as_bin[51:64])
+    packet.fragment_offset = int(fragment_offset, 16) * 8  # Parsed as a number of octets -> *8 to get bytes
+    packet.time_to_live = binary_to_string(header_as_bin[64:72])
+    packet.protocol = convert_to_protocol(binary_to_string(header_as_bin[72:80]))
+    packet.header_checksum = binary_to_string(header_as_bin[80:96])
+    packet.source_IP = convert_to_IP(binary_to_string(header_as_bin[96:128]))
+    packet.destination_IP = convert_to_IP(binary_to_string(header_as_bin[128:160]))
+    packet.type = int(binary_to_string(header_as_bin[160:168]), 16)
+    packet.code = header_as_bin[168:176]
+    packet.checksum = header_as_bin[176:192]
+    packet.rest = header_as_bin[192:]
+    return packet
+
+
+def parse_control_status(control_bin):
+    names = ['urg', 'ack', 'psh', 'rst', 'syn', 'fin']
+    bits = [int(bit) for bit in control_bin]
+    return dict(zip(names, bits))
+
+
+def parse_tcp_header(header_as_bin):
+    packet = TCP()
+    packet.version = binary_to_string(header_as_bin[0:4])
+    length = binary_to_string(header_as_bin[16:32])
+    packet.byte_length = int(length, 16)
+    packet.identification = binary_to_string(header_as_bin[32:48])
+    packet.flags = header_as_bin[48:51]
+    fragment_offset = binary_to_string(header_as_bin[51:64])
+    packet.fragment_offset = int(fragment_offset, 16) * 8  # Parsed as a number of octets -> *8 to get bytes
+    packet.time_to_live = binary_to_string(header_as_bin[64:72])
+    packet.protocol = convert_to_protocol(binary_to_string(header_as_bin[72:80]))
+    packet.header_checksum = binary_to_string(header_as_bin[80:96])
+    packet.source_IP = convert_to_IP(binary_to_string(header_as_bin[96:128]))
+    packet.destination_IP = convert_to_IP(binary_to_string(header_as_bin[128:160]))
+    packet.source_port = header_as_bin[160:176]
+    packet.dest_port = header_as_bin[176:192]
+    packet.seq_num = header_as_bin[192:224]
+    packet.ack_num = header_as_bin[224:256]
+    packet.data_offset = header_as_bin[256:260]
+    packet.reserved = header_as_bin[260:266]
+    packet.control = parse_control_status(header_as_bin[266:272])
+    packet.window_size = header_as_bin[272:288]
+    packet.checksum = header_as_bin[288:304]
+    packet.URG_pointer = header_as_bin[304:320]
+    packet.options = header_as_bin[320:336]
+    return packet
+
+
 def convert_to_protocol(param):
     result = "Unknown"
     match param:
@@ -115,46 +332,16 @@ def convert_to_protocol(param):
             result = "TCP"
         case "17":
             result = "UDP"
-
     return result
 
 
-def parse_icmp_header(packet, header_as_bin):
-    # IP header ends at 160
-    packet.ICMP_header.type = int(binary_to_string(header_as_bin[160:168]), 16)
-    packet.ICMP_header.code = header_as_bin[168:176]
-    packet.ICMP_header.checksum = header_as_bin[176:192]
-    packet.ICMP_header.rest = header_as_bin[192:]
+def parse_binary(header_as_bin):
+    protocol = convert_to_protocol(binary_to_string(header_as_bin[72:80]))
 
-
-def parse_tcmp_header(packet, header_as_bin):
-    # IP header ends at 160
-    packet.TCP_header.source_port = header_as_bin[160:176]
-    packet.TCP_header.dest_port = header_as_bin[176:192]
-    packet.TCP_header.seq_num = header_as_bin[192:224]
-    packet.TCP_header.ack_num = header_as_bin[224:256]
-    packet.TCP_header.data_offset = header_as_bin[256:260]
-    packet.TCP_header.reserved = header_as_bin[260:263]
-    packet.TCP_header.control = header_as_bin[263:272]
-    packet.TCP_header.window_size = header_as_bin[272:288]
-    packet.TCP_header.checksum = header_as_bin[288:304]
-    packet.TCP_header.URG_pointer = header_as_bin[304:320]
-    packet.TCP_header.options = header_as_bin[320:]
-
-
-def parse_ip_header(new_packet, header_as_bin):
-    new_packet.version = binary_to_string(header_as_bin[0:4])
-    length = binary_to_string(header_as_bin[16:32])
-    new_packet.byte_length = int(length, 16)
-    new_packet.identification = binary_to_string(header_as_bin[32:48])
-    new_packet.flags = header_as_bin[48:51]
-    fragment_offset = binary_to_string(header_as_bin[51:64])
-    new_packet.fragment_offset = int(fragment_offset, 16) * 8  # Parsed as a number of octets -> *8 to get bytes
-    new_packet.time_to_live = binary_to_string(header_as_bin[64:72])
-    new_packet.protocol = convert_to_protocol(binary_to_string(header_as_bin[72:80]))
-    new_packet.header_checksum = binary_to_string(header_as_bin[80:96])
-    new_packet.source_IP = convert_to_IP(binary_to_string(header_as_bin[96:128]))
-    new_packet.destination_IP = convert_to_IP(binary_to_string(header_as_bin[128:160]))
+    if protocol == 'ICMP':
+        return parse_icmp_header(header_as_bin)
+    elif protocol == 'TCP':
+        return parse_tcp_header(header_as_bin)
 
 
 def parse_packet(list):
@@ -165,13 +352,7 @@ def parse_packet(list):
     header_as_string = header_as_string.replace(' ', '')
     header_as_bin = string_to_binary(header_as_string)
 
-    new_packet = IP_Packet()
-    parse_ip_header(new_packet, header_as_bin)
-    
-    if new_packet.protocol == 'ICMP':
-        parse_icmp_header(new_packet, header_as_bin)
-    elif new_packet.protocol == 'TCP':
-        parse_tcmp_header(new_packet, header_as_bin)
+    new_packet = parse_binary(header_as_bin)  # Up to here seems good
 
     return new_packet
 
@@ -194,6 +375,11 @@ def parse_contents(contents):
     return list_of_packets
 
 
+####################################
+#            Run Main              #
+####################################
+
+
 def main(args):
     option_flag = args[1]  # == option
     filename = args[2]  # == filename
@@ -206,7 +392,7 @@ def main(args):
     if option_flag == '-i':
         # execute with egress filtering set
         egress_filtering(packet_list)
-    elif option_flag == 'j':
+    elif option_flag == '-j':
         # Write a packet filter that filters out both pings of death and smurf attacks
         two_ping_based_attacks(packet_list)
     elif option_flag == '-k':
@@ -219,8 +405,6 @@ def main(args):
     for packet in packet_list:
         print(f"{i} " + packet.malicious)
         i += 1
-
-    exit(0)
 
 
 # Press the green button in the gutter to run the script.
