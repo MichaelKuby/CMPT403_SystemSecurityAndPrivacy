@@ -58,6 +58,11 @@ class ICMP:
 
 
 class PortsList:
+
+    # permuted keys are always when checking outbound packets #
+    outbound = 'outbound'
+    inbound = 'inbound'
+
     def __init__(self):
         self.pairs = dict()
 
@@ -67,6 +72,9 @@ class PortsList:
         destination_port = int(packet.dest_port, 2)
         destination_IP = packet.destination_IP
         return source_IP, destination_IP, source_port, destination_port
+
+    def permute_key(self, key):
+        return key[1], key[0], key[3], key[2]
 
     def new_connection(self, packet):
         key = self.key(packet)
@@ -78,16 +86,24 @@ class PortsList:
             # These two ports are already in communication
             return False
 
-    def existing_connection(self, packet):
+
+    def existing_connection(self, packet, direction):
         key = self.key(packet)
-        if key in self.pairs:
-            return True
+        permuted_key = self.permute_key(key)
+
+        if direction == self.inbound:
+            if key in self.pairs:
+                return True
+        else:
+            if permuted_key in self.pairs:
+                return True
         return False
 
     def set_syn_ackd(self, packet):
         key = self.key(packet)
-        if self.pairs[key] == (True, False, False): # (Syn, Syn-Ack, Ack)
-            self.pairs[key] = (True, True, False)   # (Syn, Syn-Ack, Ack)
+        permuted_key = self.permute_key(key)
+        if self.pairs[permuted_key] == (True, False, False): # (Syn, Syn-Ack, Ack)
+            self.pairs[permuted_key] = (True, True, False)   # (Syn, Syn-Ack, Ack)
 
     def set_connected(self, packet):
         key = self.key(packet)
@@ -105,9 +121,13 @@ class PortsList:
         i = 0
         for k in self.pairs:
             if IP_pair == k[:2]:
-                if self.pairs[key] == (True, True, False) or (True, False, False):   # (True, True, True) signals full connection
+                if (self.pairs[k] == (True, True, False)) or (self.pairs[k] == (True, False, False)):   # (True, True, True) signals full connection
                     i += 1
         return i
+
+    def display(self):
+        for k, v in self.pairs.items():
+            print(f'{k} : {v}')
 
 
 ####################################
@@ -158,6 +178,7 @@ def syn_floods(packets):
 
         # Is this packet entering the network?
         if not within_subnet(packet.source_IP):
+            direction = 'inbound'
             # Is this packet trying to create a new connection?
             if new_connection(packet):
                 # Does the source_IP of the packet have less than 10 half open connections with this host?
@@ -173,12 +194,12 @@ def syn_floods(packets):
                 continue
 
             # Is this packet acknowledging an existing half open connection?
-            elif ack_half_open(packet) and ports_tracker.existing_connection(packet):
+            elif ack_half_open(packet) and ports_tracker.existing_connection(packet, direction):
                 # Set the connection to full
                 ports_tracker.set_connected(packet)
 
             # Is this a packet trying to signal a disconnection?
-            elif disconnect(packet) and ports_tracker.existing_connection(packet):
+            elif disconnect(packet) and ports_tracker.existing_connection(packet, direction):
                 # Remove the connection from the list of connected ports
                 ports_tracker.del_connection(packet)
             else:
@@ -187,17 +208,17 @@ def syn_floods(packets):
 
         # Is this packet going out of the network?
         elif within_subnet(packet.source_IP):
+            direction = 'outbound'
             # Is this a Syn-Ack response?
-            if syn_ack(packet) and ports_tracker.existing_connection(packet):
+            if syn_ack(packet) and ports_tracker.existing_connection(packet, direction):
                 # Set the connection to be syn_ackd
                 ports_tracker.set_syn_ackd(packet)
 
             # Is this a packet trying to signal a disconnection?
-            elif disconnect(packet) and ports_tracker.existing_connection(packet):
+            elif disconnect(packet) and ports_tracker.existing_connection(packet, direction):
                 ports_tracker.del_connection(packet)
 
             # If this packet is an outbound syn or ack request, we don't care
-
 
 ####################################
 #        Egress Filtering          #
@@ -359,11 +380,12 @@ def parse_packet(list):
 
 def parse_contents(contents):
     list_of_packets = list()
+    current_list = list()
     for line in contents:
         stripped_line = line.strip()
         if stripped_line.isdigit():  # A single digit signals a new packet
-            if stripped_line == "1":  # On the first iteration, we have no information to parse yet
-                current_list = list()
+            if stripped_line == "1":
+                continue    # On the first iteration, we have no information to parse yet
             else:
                 new_packet = parse_packet(current_list)  # Parse a new packet with the current list
                 list_of_packets.append(new_packet)  # Append the list to the list of parsed packets
