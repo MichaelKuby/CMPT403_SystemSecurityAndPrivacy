@@ -4,6 +4,7 @@ import sys
 ############################
 #          Global          #
 ############################
+
 network = ipaddress.ip_network("142.58.22.0/24")
 
 
@@ -104,22 +105,14 @@ class PortsList:
         i = 0
         for k in self.pairs:
             if IP_pair == k[:2]:
-                if self.pairs[key] != (True, True, True):   # (True, True, True) signals full connection
+                if self.pairs[key] == (True, True, False) or (True, False, False):   # (True, True, True) signals full connection
                     i += 1
         return i
-
 
 
 ####################################
 #           Syn Floods             #
 ####################################
-
-
-def within_subnet(ip_address):
-    if ip_address in network:
-        return True  # ip is in the network
-    else:
-        return False  # ip is not in the network
 
 
 def new_connection(packet):
@@ -149,6 +142,13 @@ def disconnect(packet):
     return False
 
 
+def within_subnet(ip_address):
+    if ip_address in network:
+        return True  # ip is in the network
+    else:
+        return False  # ip is not in the network
+
+
 def syn_floods(packets):
     ports_tracker = PortsList()  # Keeps track of communicating ports and their status.
 
@@ -156,47 +156,47 @@ def syn_floods(packets):
         if not packet.protocol == "TCP":
             continue
 
-        # Is this packet entering?
+        # Is this packet entering the network?
         if not within_subnet(packet.source_IP):
             # Is this packet trying to create a new connection?
             if new_connection(packet):
                 # Does the source_IP of the packet have less than 10 half open connections with this host?
                 if ports_tracker.get_num_half_open(packet) < 10:
-                    # Try to create a new connection.
+                    # Try to create a new connection. This may fail if the ports are already communicating
                     ports_tracker.new_connection(packet)
                 else:
                     # The source_IP of the packet is trying to open > 10 half-open connects with host
                     packet.malicious = 'yes'
 
+            # Packet is entering and responding to a syn request, we can ignore
+            elif syn_ack(packet):
+                continue
 
+            # Is this packet acknowledging an existing half open connection?
+            elif ack_half_open(packet) and ports_tracker.existing_connection(packet):
+                # Set the connection to full
+                ports_tracker.set_connected(packet)
 
-                # Is this packet acknowledging an existing half open connection?
-                elif ack_half_open(packet) and ports_tracker.existing_connection(packet):
-                    # Set the connection to full
-                    ports_tracker.set_connected(packet)
-                    # Decrement the number of half-open connections for this out-of-network IP
-                    IP_tracker[packet.source_IP] -= 1
+            # Is this a packet trying to signal a disconnection?
+            elif disconnect(packet) and ports_tracker.existing_connection(packet):
+                # Remove the connection from the list of connected ports
+                ports_tracker.del_connection(packet)
+            else:
+                # Will get here if packet makes no sense. Unknown situation.
+                continue
 
-                # Is this a packet trying to signal a disconnection?
-                elif disconnect(packet) and ports_tracker.existing_connection(packet):
-                    # Remove the connection from the list of connected ports
-                    ports_tracker.del_connection(packet)
-                else:
-                    # Should never get here. Unknown situation
-                    pass
-
-        # Is this packet going?
+        # Is this packet going out of the network?
         elif within_subnet(packet.source_IP):
-            # Is this packet Syn-Ack a Syn request?
+            # Is this a Syn-Ack response?
             if syn_ack(packet) and ports_tracker.existing_connection(packet):
                 # Set the connection to be syn_ackd
                 ports_tracker.set_syn_ackd(packet)
 
-            # If this packet is an outbound syn request, we don't care
-
-            # If this packet is an outbound fin or rst request, we need to kill the connection
+            # Is this a packet trying to signal a disconnection?
             elif disconnect(packet) and ports_tracker.existing_connection(packet):
                 ports_tracker.del_connection(packet)
+
+            # If this packet is an outbound syn or ack request, we don't care
 
 
 ####################################
