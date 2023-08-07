@@ -73,6 +73,12 @@ class PortsList:
         destination_IP = packet.destination_IP
         return source_IP, destination_IP, source_port, destination_port
 
+    def source_host(self, key):
+        source_IP = key[0]
+        destination_IP = key[1]
+        destination_port = key[3]
+        return source_IP, destination_IP, destination_port
+
     def permute_key(self, key):
         return key[1], key[0], key[3], key[2]
 
@@ -110,12 +116,33 @@ class PortsList:
         if self.pairs[key] == (True, True, False): # (Syn, Syn-Ack, Ack)
             self.pairs[key] = (True, True, True)   # (Syn, Syn-Ack, Ack)
 
-    def del_connection(self, packet):
+    def del_connection(self, packet, direction):
         key = self.key(packet)
+        permuted_key = self.permute_key(key)
         if packet.control['rst'] == 1 or packet.control['fin'] == 1:
-            del self.pairs[key]
+            if direction == self.inbound:
+                del self.pairs[key]
+            else:
+                del self.pairs[permuted_key]
 
+
+    # Seeks for the number of half open connections where
+    # (Source_IP, Dest_IP, Dest_port) represent one connection
     def get_num_half_open(self, packet):
+        packet_key = self.key(packet)
+        packet_triple = self.source_host(packet_key)
+        i = 0
+        for k in self.pairs:
+            triple = self.source_host(k)
+            if packet_triple == triple:
+                if (self.pairs[k] == (True, True, False)) or (self.pairs[k] == (True, False, False)):   # (True, True, True) signals full connection
+                    i += 1
+        return i
+
+
+    # Seeks for the number of half open connections where
+    # (Source_IP, Dest_IP) represent one connection
+    def get_num_half_open_(self, packet):
         key = self.key(packet)
         IP_pair = key[:2]
         i = 0
@@ -124,6 +151,7 @@ class PortsList:
                 if (self.pairs[k] == (True, True, False)) or (self.pairs[k] == (True, False, False)):   # (True, True, True) signals full connection
                     i += 1
         return i
+
 
     def display(self):
         for k, v in self.pairs.items():
@@ -171,8 +199,10 @@ def within_subnet(ip_address):
 
 def syn_floods(packets):
     ports_tracker = PortsList()  # Keeps track of communicating ports and their status.
+    connection_limit = 10
 
     for packet in packets:
+
         if not packet.protocol == "TCP":
             continue
 
@@ -182,7 +212,7 @@ def syn_floods(packets):
             # Is this packet trying to create a new connection?
             if new_connection(packet):
                 # Does the source_IP of the packet have less than 10 half open connections with this host?
-                if ports_tracker.get_num_half_open(packet) < 10:
+                if ports_tracker.get_num_half_open(packet) < connection_limit:
                     # Try to create a new connection. This may fail if the ports are already communicating
                     ports_tracker.new_connection(packet)
                 else:
@@ -201,7 +231,7 @@ def syn_floods(packets):
             # Is this a packet trying to signal a disconnection?
             elif disconnect(packet) and ports_tracker.existing_connection(packet, direction):
                 # Remove the connection from the list of connected ports
-                ports_tracker.del_connection(packet)
+                ports_tracker.del_connection(packet, direction)
             else:
                 # Will get here if packet makes no sense. Unknown situation.
                 continue
@@ -216,9 +246,11 @@ def syn_floods(packets):
 
             # Is this a packet trying to signal a disconnection?
             elif disconnect(packet) and ports_tracker.existing_connection(packet, direction):
-                ports_tracker.del_connection(packet)
+                ports_tracker.del_connection(packet, direction)
 
             # If this packet is an outbound syn or ack request, we don't care
+
+        ports_tracker.display()
 
 ####################################
 #        Egress Filtering          #
@@ -243,7 +275,7 @@ def egress_filtering(packets):
 
 
 def ping_of_death(packet):
-    if packet.fragment_offset + 1500 > 65535:
+    if packet.fragment_offset + packet.byte_length > 65535:
         return True
     return False
 
